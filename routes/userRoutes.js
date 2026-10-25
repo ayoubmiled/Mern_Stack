@@ -1,13 +1,27 @@
-const express = require ('express'); //#jebna express
+
+const express = require('express');
 const router = express.Router();
-const userController = require('../controllers/userController');
 
+const {
+    registerUser,
+    loginUser,
+    getUserProfile,
+    getAllUsers
+} = require('../controllers/userController');
 
-router.get('/', userController.getAllUsers);
-router.get('/:id', userController.getUserById);
-router.post('/', userController.CreateUser);
-router.delete('/:id', userController.deleteUser);
+const {
+    protect,
+    adminOnly
+} = require('../middlewares/authMiddleware');
 
+// Routes d'authentification publiques
+router.post('/register', registerUser);
+router.post('/login', loginUser);
 
+// Route privée protégée par un token JWT
+router.get('/profile', protect, getUserProfile);
+
+// Route réservée aux administrateurs
+router.get('/', protect, adminOnly, getAllUsers);
 
 module.exports = router;

@@ -1,98 +1,170 @@
 
+const Article = require('../model/articleModel');
 
+// GET /api/articles — Liste des articles
+const getAllArticles = async (req, res) => {
+    try {
+        const articles = await Article.find()
+            .populate('author', 'name email role')
+            .sort({ createdAt: -1 });
 
-let articles = [
-{ id: 1 , title : 'Bienvenue sur le blog ', author : 'Admin'} ,
-{ id: 2 , title : 'Mon premier serveur Express ', author : 'Aya' } ,
-{ id: 3 , title : 'Tester une API avec Postman ', author : 'Aya' }
-];
-
-let prochainId = 4;
-
-const getAllarticles =  (req , res) => {
-    const {author} = req.query ; // req.query.author extraire une ou plusieurs propriétés d un objet;
-    let resultat = articles ;
-    if ( author ) { // si le client a précisé ? author =...
-
-        resultat = articles.filter (a => a.author == author ) ; //retourne un tableau avec ts les éléments qui respectent la condition
-        }
-
-    res.json ({ total : resultat.length , articles : resultat }) ;
-} ;
-
-
-
-const getArticleById = (req , res) => {
-
-    const id = Number(req.params.id) ; // "2" -> 2
-    const article = articles.find (a => a.id === id) ;
-    //si l 'article n'existe pas (undefined) => raja3li 404
-    if (! article ) {
-        return res.status(404).json ({ error : 'Article ${id} introuvable ' }) ;
-        }
-    res.status (200).json (article) ;;
+        return res.status(200).json(articles);
+    } catch (err) {
+        return res.status(500).json({
+            message: err.message
+        });
+    }
 };
 
+// GET /api/articles/:id — Détail d'un article
+const getArticleById = async (req, res) => {
+    try {
+        const article = await Article.findById(req.params.id)
+            .populate('author', 'name email role');
 
-
-const CreateArticle = (req, res) => { 
-
-    const { title, author } = req.body ; // destructuring : extraire les propriétés title et author de l'objet req.body]
-    
-    if(!title || !author) {
-        return res.status(400).json({error : "Le titre et l'auteur sont obligatoires"});
+        if (!article) {
+            return res.status(404).json({
+                message: 'Article non trouvé'
+            });
         }
 
-    const nouvelArticle= {id: prochainId, title : title, author : author};
-    prochainId= prochainId+1;
-    articles.push(nouvelArticle);
-    res.status(201).json({message: 'Article crée', article: nouvelArticle});
+        return res.status(200).json(article);
+    } catch (err) {
+        if (err.name === 'CastError') {
+            return res.status(400).json({
+                message: 'Identifiant invalide'
+            });
+        }
 
-}
-
-// 4. Mettre à jour un article existant (PUT /api/ articles /: id)
-const updateArticle = (req, res) => {
-    const id = Number (req.params.id);
-    const {title, author} = req.body;
-
-    //rechercher l Index de l article dans le tableau 
-    const index = articles.findIndex (a => a.id === id);
-
-    if (index === -1) {
-        return res.status(404).json ({ error: `Artcile ${id} introuvable` });
+        return res.status(500).json({
+            message: err.message
+        });
     }
+};
 
-    if(title) articles[index].title = title; 
-    if(author) articles[index].author = author;
+// POST /api/articles (Création protégée)
+const createArticle = async (req, res) => {
+    try {
+        const { title, content } = req.body;
 
-    res.status(200).json({message: 'Article mis à jour', article: articles[index]});
-}
+        if (!title || !content) {
+            return res.status(400).json({
+                message: 'Titre et contenu obligatoires'
+            });
+        }
 
-//Methode delete 
-const deleteArticle= (req, res) => {
-    const id = Number ( req.params.id) ;
-    const articleExiste = articles.some (a=> a.id ===id);
+        // L'auteur est extrait du token vérifié
+        const newArticle = await Article.create({
+            title,
+            content,
+            author: req.user._id
+        });
 
-    if (!articleExiste) {
-        return res.status(404).json ({ error: `Article ${id} introuvable` });
+        const populated = await newArticle.populate(
+            'author',
+            'name email role'
+        );
+
+        return res.status(201).json(populated);
+
+    } catch (err) {
+        return res.status(500).json({
+            message: err.message
+        });
     }
-    //on filtre pour ne garder que les articles ayant un ID diff
-    articles = articles.filter (a=> a.id !== id) ;
-    res.status(200).json({message: `Article ${id} supprimé avec succès`});
+};
 
-}
+// PUT /api/articles/:id (Modification protégée : auteur ou admin)
+const updateArticle = async (req, res) => {
+    try {
+        const article = await Article.findById(req.params.id);
 
+        if (!article) {
+            return res.status(404).json({
+                message: 'Article non trouvé'
+            });
+        }
 
+        // Vérification des droits de propriété
+        if (
+            article.author.toString() !== req.user._id.toString() &&
+            req.user.role !== 'admin'
+        ) {
+            return res.status(403).json({
+                message: "Action interdite : vous n'êtes pas l'auteur de cet article"
+            });
+        }
 
-// Exportation CommonJS : on rend ces fonctions publiques
+        article.title = req.body.title || article.title;
+        article.content = req.body.content || article.content;
+
+        const updated = await article.save();
+
+        const populated = await updated.populate(
+            'author',
+            'name email role'
+        );
+
+        return res.status(200).json(populated);
+
+    } catch (err) {
+        if (err.name === 'CastError') {
+            return res.status(400).json({
+                message: 'Identifiant invalide'
+            });
+        }
+
+        return res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
+// DELETE /api/articles/:id (Suppression protégée : auteur ou admin)
+const deleteArticle = async (req, res) => {
+    try {
+        const article = await Article.findById(req.params.id);
+
+        if (!article) {
+            return res.status(404).json({
+                message: 'Article non trouvé'
+            });
+        }
+
+        // Vérification des droits de propriété
+        if (
+            article.author.toString() !== req.user._id.toString() &&
+            req.user.role !== 'admin'
+        ) {
+            return res.status(403).json({
+                message: "Action interdite : vous n'êtes pas l'auteur de cet article"
+            });
+        }
+
+        await Article.findByIdAndDelete(req.params.id);
+
+        return res.status(200).json({
+            message: 'Article supprimé avec succès',
+            id: req.params.id
+        });
+
+    } catch (err) {
+        if (err.name === 'CastError') {
+            return res.status(400).json({
+                message: 'Identifiant invalide'
+            });
+        }
+
+        return res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
 module.exports = {
-getAllarticles ,
-getArticleById ,
-CreateArticle,
-updateArticle,
-deleteArticle
+    getAllArticles,
+    getArticleById,
+    createArticle,
+    updateArticle,
+    deleteArticle
 };
-
-
-
-

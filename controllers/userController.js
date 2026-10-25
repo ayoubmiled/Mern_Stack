@@ -1,78 +1,149 @@
-const { estNonVide, estEmailValide } = require('../utils/validators');
 
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const User = require('../model/userModel');
 
-let users = [
-        {id: 1, name: "Khouloud", email: "khouloud@example.com", role :"Ingenieur"},
-        {id: 2, name: "Aya", email: "aya@example.com", role :"Etudiant" },
-        {id: 3, name: "Ahmed", email: "ahmed@example.com", role :"Enseignant"}
-        ]
+// Utilitaire de génération du token JWT
+const generateToken = (id, role) => {
+    return jwt.sign(
+        { id, role },
+        process.env.JWT_SECRET,
+        { expiresIn: '1d' }
+    );
+};
 
-let prochainId = 5;
+// POST /api/users/register — Inscription
+const registerUser = async (req, res) => {
+    try {
+        const { name, email, password, age } = req.body;
 
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                message: 'Nom, email et mot de passe requis'
+            });
+        }
 
-const getAllUsers =(req,res) => {
-    const {name} = req.query;
-    let result = users;
-    if (name) {
-        result = users.filter (u => u.name === name);
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const userExists = await User.findOne({
+            email: normalizedEmail
+        });
+
+        if (userExists) {
+            return res.status(409).json({
+                message: 'Cet email est déjà utilisé'
+            });
+        }
+
+        // Hachage du mot de passe
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Création du compte : rôle utilisateur par défaut
+        const user = await User.create({
+            name: name.trim(),
+            email: normalizedEmail,
+            password: hashedPassword,
+            age
+        });
+
+        return res.status(201).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            token: generateToken(user._id.toString(), user.role)
+        });
+
+    } catch (err) {
+        if (err.name === 'ValidationError') {
+            return res.status(400).json({
+                message: err.message
+            });
+        }
+
+        if (err.code === 11000) {
+            return res.status(409).json({
+                message: 'Cet email est déjà utilisé'
+            });
+        }
+
+        return res.status(500).json({
+            message: 'Erreur interne du serveur'
+        });
     }
+};
 
-    res.json({users: result});
+// POST /api/users/login — Connexion
+const loginUser = async (req, res) => {
+    try {
+        const { email, password } = req.body;
 
-}
+        if (!email || !password) {
+            return res.status(400).json({
+                message: 'Email et mot de passe requis'
+            });
+        }
 
-const getUserById = (req,res) =>{
+        const user = await User.findOne({
+            email: email.trim().toLowerCase()
+        });
 
-    const id =Number (req.params.id);
-    const user = users.find (u=> u.id ===id);
-    if (!user) {
-        res.status(404).json({error: `Utilisateur ${id} introuvable`});
+        if (!user) {
+            return res.status(401).json({
+                message: 'Identifiants invalides'
+            });
+        }
+
+        // Comparaison du mot de passe avec le hash enregistré
+        const isMatch = await bcrypt.compare(
+            password,
+            user.password
+        );
+
+        if (!isMatch) {
+            return res.status(401).json({
+                message: 'Identifiants invalides'
+            });
+        }
+
+        return res.status(200).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            token: generateToken(user._id.toString(), user.role)
+        });
+
+    } catch (err) {
+        return res.status(500).json({
+            message: 'Erreur interne du serveur'
+        });
     }
+};
 
-    res.json({user: user});
-}
+// GET /api/users/profile — Profil protégé
+const getUserProfile = async (req, res) => {
+    return res.status(200).json(req.user);
+};
 
-//validation obligatoire de name et email, statut 201
-const CreateUser = (req, res) => {
-    const {name, email, role} = req.body; //  destructuring : extraire les propriétés name et email de l'objet req.body]
+// GET /api/users — Liste des utilisateurs (admin uniquement)
+const getAllUsers = async (req, res) => {
+    try {
+        const users = await User.find().select('-password');
 
-    if (!estNonVide(name)) {
-        return res.status(400).json({ error: "Le nom est obligatoire et ne peut pas être vide" });
+        return res.status(200).json(users);
+
+    } catch (err) {
+        return res.status(500).json({
+            message: 'Erreur interne du serveur'
+        });
     }
-    if (!estEmailValide(email)) {
-        return res.status(400).json({ error: "L'email est invalide (il doit contenir @ et .)" });
-    }
-
-    const newUser = {id:prochainId, name: name, email:email, role:role};
-    prochainId = prochainId+1 ; 
-    users.push(newUser);
-    res.status(201).json({message: 'Utilisateur créé', user: newUser});
-
-}
-
-
-
-//Methode delete 
-const deleteUser= (req, res) => {
-    const id = Number ( req.params.id) ;
-    const UserExiste = users.some (a=> a.id ===id);
-
-    if (!UserExiste) {
-        return res.status(404).json ({ error: `User ${id} introuvable` });
-    }
-    //on filtre pour ne garder que les articles ayant un ID diff
-    users = users.filter (a=> a.id !== id) ;
-    res.status(200).json({message: `User ${id} supprimé avec succès`});
-
-}
-
-
+};
 
 module.exports = {
-    getAllUsers,
-    getUserById,
-    CreateUser,
-    deleteUser,
-
-}
-
+    registerUser,
+    loginUser,
+    getUserProfile,
+    getAllUsers
+};
